@@ -231,10 +231,10 @@ buildDeb.dependsOn prePackage
 
 buildRpm {
     requires('java-11-openjdk-devel')
-    requires('postgis30_10')
-    requires('postgis30_10-utils')
-    requires('postgresql10-server')
-    requires('postgresql10-contrib')
+    requires('postgis32_14')
+    requires('postgis32_14-utils')
+    requires('postgresql14-server')
+    requires('postgresql14-contrib')
     requires('openssl')
 }
 

@@ -8,6 +8,7 @@ import java.sql.Statement;
 
 import org.flywaydb.core.api.FlywayException;
 import org.flywaydb.core.api.MigrationVersion;
+import org.flywaydb.core.api.output.MigrateResult;
 import org.flywaydb.core.api.configuration.ClassicConfiguration;
 import org.flywaydb.core.api.configuration.FluentConfiguration;
 import org.slf4j.LoggerFactory;
@@ -72,7 +73,9 @@ public class UpgradeCommand extends Command {
 		if (migrationIsValid) {
 			int numberOfUpgrades = 0;
 			try {
-				numberOfUpgrades = schemaManager.flyway.migrate();
+				//numberOfUpgrades = schemaManager.flyway.migrate();
+				MigrateResult migrateResult = schemaManager.flyway.migrate();
+				numberOfUpgrades = migrateResult.migrationsExecuted;
 				if (numberOfUpgrades > 0) {
 					logger.info("Successfully applied " + numberOfUpgrades + " update(s).");
 				}
@@ -89,7 +92,9 @@ public class UpgradeCommand extends Command {
 				if (!updateMigrationChecksum()) {
 					throw e;
 				} else {
-					numberOfUpgrades = schemaManager.flyway.migrate();
+					//numberOfUpgrades = schemaManager.flyway.migrate();
+					MigrateResult migrateResult = schemaManager.flyway.migrate();
+					numberOfUpgrades = migrateResult.migrationsExecuted;
 					if (numberOfUpgrades > 0) {
 						logger.info("Successfully applied " + numberOfUpgrades + " update(s).");
 					}
