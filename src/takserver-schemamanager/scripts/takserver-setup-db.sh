@@ -38,6 +38,7 @@ if [ -z "$password" ]; then
 fi
 
 md5pass=$(echo -n "md5" && echo -n "$password$username" | md5sum | tr -dc "a-zA-Z0-9\n")
+
 #
 # switch CWD to the location where this script resides
 #
@@ -49,65 +50,111 @@ if [ $# -lt 1 ]; then
 fi
 
 DB_INIT=""
+
 #
-# Ensure PostgreSQL is initialized.
+# Get postgresql servicename 
 #
-if [ -x /usr/pgsql-14/bin/postgresql-14-setup ]; then
-    DB_INIT="/usr/pgsql-14/bin/postgresql-14-setup initdb"
-else
-    echo "WARNING: Unable to automatically initialize PostgreSQL database."
+PGSERVICE=$(systemctl list-unit-files | awk '/postgresql/{print $1}')
+if [ -z "PGSERVICE" ]; then
+	echo "Postgresql service not found - Exit"
+	exit 1
+fi 
+#
+# Get postgresql version
+#
+PGVERSION=$(psql -V | awk '{printf "%d\n", $3}')
+if [ -z "PGVERSION" ]; then
+	echo "Postgresql version not found - Exit"
+	exit 1
+fi 
+
+#
+# info to user
+#
+echo "Found postgresql service: ${PGSERVICE}"
+echo "Found postgrelql version: ${PGVERSION}"
+
+#
+# DB init
+#
+if [ -x /usr/pgsql-${PGVERSION}/bin/postgresql-${PGVERSION}-setup ]; then
+    DB_INIT="/usr/pgsql-${PGVERSION}/bin/postgresql-${PGVERSION}-setup initdb"
 fi
 
-echo -n "Database initialization: " 
-$DB_INIT 
-if [ $? -eq 0 ]; then
-    echo "PostgreSQL database initialized."
+if [ -n "$DB_INIT" ]; then
+	echo -n "Database initialization: " 
+	$DB_INIT 
+	if [ $? -eq 0 ]; then
+    	echo "PostgreSQL ${PGVERSION} database initialized successfully"
+	else
+    	echo "WARNING: Failed to initialize PostgreSQL ${PGVERSION} database"
+    	echo "This could simply mean your database has already been initialized"
+	fi
 else
-    echo "WARNING: Failed to initialize PostgreSQL database."
-    echo "This could simply mean your database has already been initialized."
+	echo "ERROR: Unable to automatically find setup for PostgreSQL ${PGVERSION} database"
+	echo "ERROR: initdb fail. Exit"
+	exit 1
 fi
+	
 #
+# check if service is enabled
 #
-#
-if [ "$(systemctl is-enabled postgresql-14.service)" = "disabled" ]; then
-   systemctl enable postgresql-14.service
-   POSTGRES_CMD="/bin/systemctl restart postgresql-14.service"
-   export PGDATA=/var/lib/pgsql/14/data
+if [ "$(systemctl is-enabled ${PGSERVICE})" = "disabled" ]; then
+   	systemctl enable ${PGSERVICE}
+   	if [ $? -eq 0 ]; then
+    	echo "PostgreSQL ${PGVERSION} enable successfully"
+	else
+    	echo "ERROR: PostgreSQL ${PGVERSION} enable sevice fail!"
+    fi
+   	export PGDATA=/var/lib/pgsql/${PGVERSION}/data
 fi  
-$POSTGRES_CMD
-if [ $? -eq 0 ]; then
-    echo "PostgreSQL restart sucessfully."
-else
-    echo "PostgreSQL restart fail!"
+#
+# Start postgres 
+#
+if [ "$(systemctl is-active ${PGSERVICE})" = "inactive" ]; then
+   	systemctl start ${PGSERVICE}
+   	if [ $? -eq 0 ]; then
+    	echo "PostgreSQL ${PGVERSION} start successfully"
+	else
+    	echo "ERROR: PostgreSQL ${PGVERSION} start fail!"
+    fi
 fi
+
 
 if [ ! -d $PGDATA ]; then
-  echo "ERROR: Cannot find PostgreSQL data directory. Please set PGDATA manually and re-run."
-  exit 1
+	echo "ERROR: Cannot find PostgreSQL ${PGVERSION} data directory. Please set PGDATA manually and re-run"
+	exit 1
 fi
 #
 # Get user's permission before obliterating the database
 #
-DB_EXISTS=`su postgres -c "psql -l 2>/dev/null" | grep ^[[:blank:]]*$DB_NAME`
-if [ "x$DB_EXISTS" != "x" ]; then
-   echo "WARNING: Database '$DB_NAME' already exists!"
-   echo "Proceeding will DESTROY your existing data!"
-   echo "You can back up your data using the pg_dump command. (See 'man pg_dump' for details.)"
-   read -p "Type 'erase' (without quotes) to erase the '$DB_NAME' database now:" kickme
-   if [ "$kickme" != "erase" ]; then
-       echo "User didn't say 'erase'. Aborting."
-       exit 1
-   fi
-   su postgres -c "psql --command='drop database if exists $DB_NAME;'"
+DB_EXISTS=$(su postgres -c "psql -l 2>/dev/null" |  egrep ^[[:blank:]]?$DB_NAME[[:blank:]])
+
+if [ -n "$DB_EXISTS" ]; then
+	echo "WARNING: Database $DB_NAME' already exists!"
+   	echo "Proceeding will DESTROY your existing data!"
+   	echo "You can back up your data using the pg_dump command. (See 'man pg_dump' for details.)"
+   	read -p "Type 'erase' (without quotes) to erase the '$DB_NAME' database now:" kickme
+   	if [ "$kickme" != "erase" ]; then
+    	echo "User didn't say 'erase'. Aborting"
+      	exit 1
+   	fi
+   	su postgres -c "psql --command='drop database if exists $DB_NAME;'"
+   	if [ $? -eq 0 ]; then
+    	echo "Drop database $DB_NAME successfully"
+	else
+    	echo "ERROR: Drop database $DB_NAME fail!"
+    fi
 fi 
 
 if [ -e pg_hba.conf ]; then
   IS_DOCKER='true'
 fi
+
 #
 # Install our version of pg_hba.conf
 #
-echo "Installing TAKServer's version of PostgreSQL access-control policy."
+echo "Installing TAKServer's version of PostgreSQL ${PGVERSION} access-control policy"
 #
 # Back up pg_hba.conf
 #
@@ -115,71 +162,95 @@ BACKUP_SUFFIX=`date --rfc-3339='seconds' | sed 's/ /-/'`
 HBA_BACKUP=$PGDATA/pg_hba.conf.backup-$BACKUP_SUFFIX
 
 if [ -e /opt/tak/db-utils/pg_hba.conf ] || [ -e pg_hba.conf ]; then
-  if [ -e $PGDATA/pg_hba.conf ]; then
-    mv $PGDATA/pg_hba.conf $HBA_BACKUP
-    echo "Copied existing PostgreSQL access-control policy to $HBA_BACKUP."
-  fi
+	if [ -e $PGDATA/pg_hba.conf ]; then
+    	mv $PGDATA/pg_hba.conf $HBA_BACKUP
+    	echo "Copied existing PostgreSQL access-control policy to $HBA_BACKUP"
+  	fi
 
-   # for docker install
-  if [ IS_DOCKER ]; then
-    cp pg_hba.conf $PGDATA
-  else
-    # for RPM install
-    echo "RPM db install"
-     cp /opt/tak/db-utils/pg_hba.conf $PGDATA
-  fi
+   	# for docker install
+  	if [ IS_DOCKER ]; then
+    	cp pg_hba.conf $PGDATA
+  	else
+    	# for RPM install
+    	echo "RPM db install"
+     	cp /opt/tak/db-utils/pg_hba.conf $PGDATA
+  	fi
 
-  chown postgres:postgres $PGDATA/pg_hba.conf
-  chmod 600 $PGDATA/pg_hba.conf
-  echo "Installed TAKServer's PostgreSQL access-control policy to $PGDATA/pg_hba.conf."
-  echo "Restarting PostgreSQL service."
-  $POSTGRES_CMD
+  	chown postgres:postgres $PGDATA/pg_hba.conf
+  	chmod 600 $PGDATA/pg_hba.conf
+  	echo "Installed TAKServer's PostgreSQL access-control policy to $PGDATA/pg_hba.conf"
+  	echo "Restarting PostgreSQL service"
+  	systemctl restart ${PGSERVICE}
+  	if [ $? -eq 0 ]; then
+		echo "Restarting PostgreSQL service successfully"
+  	else
+  		echo "ERROR: Restarting PostgreSQL service fail"
+  	fi
 else
-  echo "ERROR: Unable to find pg_hba.conf!"
-  exit 1
+  	echo "ERROR: Unable to find pg_hba.conf!"
+  	exit 1
 fi
-
+#
+# Install our version of postgresql.conf
+#
+#
+echo "Installing TAKServer's version of PostgreSQL ${PGVERSION} configuration"
+#
+# Back up postgresql.conf
+#
 CONF_BACKUP=$PGDATA/postgresql.conf.backup-$BACKUP_SUFFIX
 if [ -e /opt/tak/db-utils/postgresql.conf ] || [ -e postgresql.conf ];  then
-  if [ -e $PGDATA/postgresql.conf ]; then
-    mv $PGDATA/postgresql.conf $CONF_BACKUP
-    echo "Copied existing PostgreSQL configuration to $CONF_BACKUP."
-  fi
+  	if [ -e $PGDATA/postgresql.conf ]; then
+    	mv $PGDATA/postgresql.conf $CONF_BACKUP
+   	 	echo "Copied existing PostgreSQL configuration to $CONF_BACKUP"
+  	fi
 
-   # for docker install
-  if [ IS_DOCKER ]; then
-    cp postgresql.conf $PGDATA
-  else
-    # for RPM install
-    echo "RPM db install"
-      cp /opt/tak/db-utils/postgresql.conf $PGDATA
-  fi
+  	 # for docker install
+  	if [ IS_DOCKER ]; then
+    	cp postgresql.conf $PGDATA
+  	else
+    	# for RPM install
+    	echo "RPM db install"
+      	cp /opt/tak/db-utils/postgresql.conf $PGDATA
+  	fi
 
-  chown postgres:postgres $PGDATA/postgresql.conf
-  chmod 600 $PGDATA/postgresql.conf
-  echo "Installed TAKServer's PostgreSQL configuration to $PGDATA/postgresql.conf."
-  echo "Restarting PostgreSQL service."
-  $POSTGRES_CMD
+  	chown postgres:postgres $PGDATA/postgresql.conf
+  	chmod 600 $PGDATA/postgresql.conf
+  	echo "Installed TAKServer's PostgreSQL configuration to $PGDATA/postgresql.conf"
+  	echo "Restarting PostgreSQL service"
+  	systemctl restart ${PGSERVICE}
+  	if [ $? -eq 0 ]; then
+		echo "Restarting PostgreSQL service successfully"
+  	fi
 fi
 
-DB_NAME=cot
-if [ $# -eq 1 ] ; then
-    DB_NAME=$1
-fi
-
+#
 # Create the user "martiuser" if it does not exist.
+#
 echo "Creating user \"martiuser\" ..."
 su - postgres -c "psql -U postgres -c \"CREATE ROLE martiuser LOGIN ENCRYPTED PASSWORD '$md5pass' SUPERUSER INHERIT CREATEDB NOCREATEROLE;\""
-
+if [ $? -eq 0 ]; then
+	echo "Creating user \"martiuser\" succesfully"
+else
+	echo "ERROR: Creating user \"martiuser\" fail"
+	exit 1
+fi
+#
 # create the database
+#
 echo "Creating database $DB_NAME"
 su - postgres -c "createdb -U postgres --owner=martiuser $DB_NAME"
-if [ $? -ne 0 ]; then
+if [ $? -eq 0 ]; then
+	echo "Database $DB_NAME created successfully"
+else
+	echo "ERROR: Creating database $DB_NAME fail"
     exit 1
 fi
 
-echo "Database $DB_NAME created."
-
+#
+# Create schema
+#
+echo "Create schema......"
 if [ IS_DOCKER ]; then
    java -jar SchemaManager.jar upgrade
 elif [ -e /opt/tak/db-utils/SchemaManager.jar ]; then
@@ -189,6 +260,4 @@ else
    exit 1
 fi
 
-echo "Database updated with SchemaManager.jar"
-
-
+echo "Database $DB_NAME updated with SchemaManager.jar"
